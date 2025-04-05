@@ -1,0 +1,1 @@
+cast send 0x0607A59E6b2b92ACb37D195d4d1E32D13Dd1D7b0 "incrementUserCounter()" --rpc-url https://testnet-rpc.monad.xyz --private-key b5ac51445cabe83e7fa81a1ef182e8d62640be5690d682ac341fbf0168f94a59

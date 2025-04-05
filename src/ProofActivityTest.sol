@@ -3,31 +3,32 @@ pragma solidity ^0.8.20;
 
 /**
  * @title ProofActivity
- * @dev Improved solution for Proof of Activity with integrated token
- * Enhanced with security improvements and optimizations
+ * @dev Complete solution for Proof of Activity with integrated token
  */
-contract ProofActivity {
+contract ProofActivityTest {
     // === Token Basic Info ===
-    string public name = "MOONAD";
-    string public symbol = "MOONAD";
-    uint8 public constant DECIMALS = 18;
-    string public tokenURI = "https://i.postimg.cc/63LY8Sw-t/Screenshot-2025-04-05-at-21-46-56.png";
+    string public name = "Activity Token";
+    string public symbol = "ACT";
+    uint8 public decimals = 18;
+    
+    // Token metadata URL with embedded image
+    string public tokenURI = "PASTE_DATA_IMAGE_HERE";
     
     // === Activity System Constants ===
     uint256 public constant TOTAL_EPOCH_REWARD = 1_000_000 * 10**18; // 1 million tokens per epoch
     uint256 public constant MAX_SUPPLY = 365_000_000 * 10**18; // 365 million tokens max supply
-    uint256 public constant EPOCH_DURATION = 1 days; // 24 hours
-    uint256 public constant MAX_TX_PER_USER_EPOCH = 10000; // Limit transactions per user per epoch
+    uint256 public constant EPOCH_DURATION = 30 minutes; // 30 minutes for testing
+    
+    // === Burn Fee Constants ===
+    uint256 public burnFeePercent = 1; // 1% burn fee on transfers
     
     // === State Variables ===
     bool public paused;
     uint256 public totalTxCount;
-    uint256 public immutable epochStartTime;
+    uint256 public epochStartTime;
     uint256 public totalMinted;
     uint256 private _totalSupply;
     address public owner;
-    address public pendingOwner;
-    bool private _reentrancyLock;
     
     // === Mappings for Token ===
     mapping(address => uint256) private _balances;
@@ -66,80 +67,58 @@ contract ProofActivity {
         uint256 totalMinted;
         uint256 maxSupply;
         uint256 totalSupply;
+        uint256 burnFeePercent;
         EpochStats[] epochs;
     }
 
-    // === Events ===
+    // === Events for Token ===
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
+    event Burn(address indexed from, uint256 value);
     event TokenURIUpdated(string newURI);
-    event UserCounterCreated(address indexed user, uint256 indexed epoch, uint256 txCount);
-    event UserCounterIncremented(address indexed user, uint256 indexed epoch, uint256 newCount);
-    event UserCounterRegistered(address indexed user, uint256 indexed epoch, uint256 count);
-    event RewardClaimed(address indexed user, uint256 indexed epoch, uint256 amount);
+    
+    // === Events for Activity System ===
+    event UserCounterCreated(address user, uint256 epoch);
+    event UserCounterIncremented(address user, uint256 epoch, uint256 newCount);
+    event UserCounterRegistered(address user, uint256 epoch, uint256 count);
+    event RewardClaimed(address user, uint256 epoch, uint256 amount);
     event DirectorPaused();
     event DirectorResumed();
+    event TokensBurned(address from, uint256 amount, string reason);
+    event BurnFeeUpdated(uint256 newFee);
     event MaxSupplyReached();
-    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-
-    // === Custom Errors ===
-    error Paused();
-    error NotOwner();
-    error AlreadyInitialized();
-    error ZeroAddress();
-    error InvalidEpoch();
-    error CounterNotInitialized();
-    error AlreadyRegistered();
-    error NotRegistered();
-    error AlreadyClaimed();
-    error EpochTooRecent();
-    error MaxSupplyExceeded();
-    error InsufficientBalance();
-    error InsufficientAllowance();
-    error TransferFailed();
-    error MaxTxPerEpochExceeded();
-    error ReentrancyGuard();
 
     // === Constructor ===
-    constructor() {
+    constructor(uint256 initialSupply) {
         epochStartTime = block.timestamp;
         paused = true; // Start paused
         owner = msg.sender;
         totalMinted = 0;
+        
+        // Mint initial supply to the owner if specified
+        if (initialSupply > 0) {
+            _mint(msg.sender, initialSupply);
+            totalMinted = initialSupply;
+        }
     }
 
     // === Modifiers ===
     modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
+        require(msg.sender == owner, "Not owner");
         _;
     }
 
     modifier notPaused() {
-        if (paused) revert Paused();
+        require(!paused, "System is paused");
         _;
     }
 
     modifier onlyCorrectEpoch(uint256 epoch) {
-        if (epoch != getCurrentEpoch()) revert InvalidEpoch();
+        require(epoch == getCurrentEpoch(), "Wrong epoch");
         _;
     }
     
-    modifier nonReentrant() {
-        if (_reentrancyLock) revert ReentrancyGuard();
-        _reentrancyLock = true;
-        _;
-        _reentrancyLock = false;
-    }
-
     // === ERC20 Token Functions ===
-    
-    /**
-     * @dev Returns the token decimals
-     */
-    function decimals() external pure returns (uint8) {
-        return DECIMALS;
-    }
     
     /**
      * @dev Returns the total token supply
@@ -158,7 +137,7 @@ contract ProofActivity {
     /**
      * @dev Transfers tokens to the specified address
      */
-    function transfer(address to, uint256 amount) external nonReentrant returns (bool) {
+    function transfer(address to, uint256 amount) external returns (bool) {
         _transfer(msg.sender, to, amount);
         return true;
     }
@@ -179,45 +158,50 @@ contract ProofActivity {
     }
     
     /**
-     * @dev Safe approve that checks current allowance first
-     */
-    function safeApprove(address spender, uint256 amount) external returns (bool) {
-        uint256 currentAllowance = _allowances[msg.sender][spender];
-        if (currentAllowance != 0) {
-            _approve(msg.sender, spender, 0);
-        }
-        _approve(msg.sender, spender, amount);
-        return true;
-    }
-    
-    /**
-     * @dev Increases the allowance given to a spender
-     */
-    function increaseAllowance(address spender, uint256 addedValue) external returns (bool) {
-        _approve(msg.sender, spender, _allowances[msg.sender][spender] + addedValue);
-        return true;
-    }
-    
-    /**
-     * @dev Decreases the allowance given to a spender
-     */
-    function decreaseAllowance(address spender, uint256 subtractedValue) external returns (bool) {
-        uint256 currentAllowance = _allowances[msg.sender][spender];
-        if (currentAllowance < subtractedValue) {
-            revert InsufficientAllowance();
-        }
-        unchecked {
-            _approve(msg.sender, spender, currentAllowance - subtractedValue);
-        }
-        return true;
-    }
-    
-    /**
      * @dev Transfers tokens from one address to another using allowance
      */
-    function transferFrom(address from, address to, uint256 amount) external nonReentrant returns (bool) {
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
         _spendAllowance(from, msg.sender, amount);
         _transfer(from, to, amount);
+        return true;
+    }
+    
+    /**
+     * @dev Burns tokens from the caller
+     */
+    function burn(uint256 amount) external returns (bool) {
+        _burn(msg.sender, amount);
+        return true;
+    }
+    
+    /**
+     * @dev Burns tokens from an account that has given allowance
+     */
+    function burnFrom(address account, uint256 amount) external returns (bool) {
+        _spendAllowance(account, msg.sender, amount);
+        _burn(account, amount);
+        return true;
+    }
+    
+    /**
+     * @dev Transfer tokens with burn fee
+     * A percentage of tokens will be burned during transfer
+     */
+    function transferWithBurn(address to, uint256 amount) external returns (bool) {
+        require(to != address(0), "Cannot transfer to zero address");
+        require(amount > 0, "Amount must be greater than 0");
+        
+        // Calculate burn amount and remaining amount
+        uint256 burnAmount = (amount * burnFeePercent) / 100;
+        uint256 transferAmount = amount - burnAmount;
+        
+        // Burn tokens
+        _burn(msg.sender, burnAmount);
+        
+        // Transfer remaining tokens
+        _transfer(msg.sender, to, transferAmount);
+        
+        emit TokensBurned(msg.sender, burnAmount, "Transfer fee burn");
         return true;
     }
     
@@ -226,7 +210,7 @@ contract ProofActivity {
     /**
      * @dev Create a new user counter for the current epoch
      */
-    function newUserCounter() external notPaused nonReentrant {
+    function newUserCounter() external notPaused {
         uint256 currentEpoch = getCurrentEpoch();
         UserCounter storage counter = userCounters[msg.sender][currentEpoch];
         
@@ -237,20 +221,18 @@ contract ProofActivity {
             counter.registered = false;
             counter.claimed = false;
             
-            emit UserCounterCreated(msg.sender, currentEpoch, 1);
+            emit UserCounterCreated(msg.sender, currentEpoch);
         }
     }
 
     /**
      * @dev Increment the user counter for the current epoch
      */
-    function incrementUserCounter() external notPaused onlyCorrectEpoch(getCurrentEpoch()) nonReentrant {
+    function incrementUserCounter() external notPaused onlyCorrectEpoch(getCurrentEpoch()) {
         uint256 currentEpoch = getCurrentEpoch();
         UserCounter storage counter = userCounters[msg.sender][currentEpoch];
         
-        if (counter.txCount == 0) revert CounterNotInitialized();
-        if (counter.txCount >= MAX_TX_PER_USER_EPOCH) revert MaxTxPerEpochExceeded();
-        
+        require(counter.txCount > 0, "Counter not initialized");
         counter.txCount += 1;
         
         emit UserCounterIncremented(msg.sender, currentEpoch, counter.txCount);
@@ -260,17 +242,15 @@ contract ProofActivity {
      * @dev Register a user counter for the previous epoch
      * Can only be called during the epoch after the counter's epoch
      */
-    function registerUserCounter() external notPaused nonReentrant {
+    function registerUserCounter() external notPaused {
         uint256 currentEpoch = getCurrentEpoch();
-        if (currentEpoch == 0) revert InvalidEpoch();
-        
         uint256 previousEpoch = currentEpoch - 1;
         
         UserCounter storage counter = userCounters[msg.sender][previousEpoch];
         
-        if (counter.txCount == 0) revert CounterNotInitialized();
-        if (counter.registered) revert AlreadyRegistered();
-        if (userRegisteredInEpoch[previousEpoch][msg.sender]) revert AlreadyRegistered();
+        require(counter.txCount > 0, "Counter not initialized");
+        require(!counter.registered, "Counter already registered");
+        require(!userRegisteredInEpoch[previousEpoch][msg.sender], "Already registered for this epoch");
         
         // Mark as registered
         counter.registered = true;
@@ -290,14 +270,14 @@ contract ProofActivity {
      * @dev Claim rewards for a registered user counter
      * Can only be called from the 2nd epoch after the counter's epoch
      */
-    function claimUserReward(uint256 epochToClaim) external nonReentrant {
+    function claimUserReward(uint256 epochToClaim) external {
         uint256 currentEpoch = getCurrentEpoch();
-        if (epochToClaim > currentEpoch - 2) revert EpochTooRecent();
+        require(epochToClaim <= currentEpoch - 2, "Epoch too recent");
         
         UserCounter storage counter = userCounters[msg.sender][epochToClaim];
         
-        if (!counter.registered) revert NotRegistered();
-        if (counter.claimed) revert AlreadyClaimed();
+        require(counter.registered, "Counter not registered");
+        require(!counter.claimed, "Rewards already claimed");
         
         EpochCounter storage epochCounter = epochCounters[epochToClaim];
         uint256 userTxs = epochCounter.userCounts[msg.sender];
@@ -319,14 +299,14 @@ contract ProofActivity {
             userReward = MAX_SUPPLY - totalMinted;
         }
         
-        // Mark as claimed before state changes
+        // Mark as claimed
         counter.claimed = true;
-        
-        // Update total minted first
-        totalMinted += userReward;
         
         // Mint tokens directly to the user
         _mint(msg.sender, userReward);
+        
+        // Update total minted
+        totalMinted += userReward;
         
         emit RewardClaimed(msg.sender, epochToClaim, userReward);
     }
@@ -378,6 +358,7 @@ contract ProofActivity {
             totalMinted: totalMinted,
             maxSupply: MAX_SUPPLY,
             totalSupply: _totalSupply,
+            burnFeePercent: burnFeePercent,
             epochs: epochStats
         });
     }
@@ -439,27 +420,20 @@ contract ProofActivity {
     }
     
     /**
-     * @dev Start the process of transferring ownership of the contract
-     * Implements a 2-step ownership transfer for security
+     * @dev Transfer ownership of the contract
      */
     function transferOwnership(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert ZeroAddress();
-        pendingOwner = newOwner;
-        emit OwnershipTransferStarted(owner, newOwner);
+        require(newOwner != address(0), "New owner cannot be zero address");
+        owner = newOwner;
     }
     
     /**
-     * @dev Accept ownership transfer
-     * Only the pending owner can complete the transfer
+     * @dev Update burn fee percentage
      */
-    function acceptOwnership() external {
-        if (msg.sender != pendingOwner) revert NotOwner();
-        
-        address oldOwner = owner;
-        owner = pendingOwner;
-        pendingOwner = address(0);
-        
-        emit OwnershipTransferred(oldOwner, owner);
+    function setBurnFeePercent(uint256 newFee) external onlyOwner {
+        require(newFee <= 10, "Fee cannot exceed 10%");
+        burnFeePercent = newFee;
+        emit BurnFeeUpdated(newFee);
     }
     
     /**
@@ -476,10 +450,11 @@ contract ProofActivity {
      * @dev Internal function to transfer tokens
      */
     function _transfer(address from, address to, uint256 amount) internal {
-        if (from == address(0) || to == address(0)) revert ZeroAddress();
+        require(from != address(0), "Transfer from zero address");
+        require(to != address(0), "Transfer to zero address");
         
         uint256 fromBalance = _balances[from];
-        if (fromBalance < amount) revert InsufficientBalance();
+        require(fromBalance >= amount, "Transfer amount exceeds balance");
         
         unchecked {
             _balances[from] = fromBalance - amount;
@@ -493,7 +468,8 @@ contract ProofActivity {
      * @dev Internal function to approve spending
      */
     function _approve(address _owner, address spender, uint256 amount) internal {
-        if (_owner == address(0) || spender == address(0)) revert ZeroAddress();
+        require(_owner != address(0), "Approve from zero address");
+        require(spender != address(0), "Approve to zero address");
         
         _allowances[_owner][spender] = amount;
         emit Approval(_owner, spender, amount);
@@ -506,7 +482,7 @@ contract ProofActivity {
         uint256 currentAllowance = _allowances[_owner][spender];
         
         if (currentAllowance != type(uint256).max) {
-            if (currentAllowance < amount) revert InsufficientAllowance();
+            require(currentAllowance >= amount, "Insufficient allowance");
             unchecked {
                 _approve(_owner, spender, currentAllowance - amount);
             }
@@ -517,7 +493,7 @@ contract ProofActivity {
      * @dev Internal function to mint tokens
      */
     function _mint(address account, uint256 amount) internal {
-        if (account == address(0)) revert ZeroAddress();
+        require(account != address(0), "Mint to zero address");
         
         _totalSupply += amount;
         unchecked {
@@ -525,5 +501,23 @@ contract ProofActivity {
         }
         
         emit Transfer(address(0), account, amount);
+    }
+    
+    /**
+     * @dev Internal function to burn tokens
+     */
+    function _burn(address account, uint256 amount) internal {
+        require(account != address(0), "Burn from zero address");
+        
+        uint256 accountBalance = _balances[account];
+        require(accountBalance >= amount, "Burn amount exceeds balance");
+        
+        unchecked {
+            _balances[account] = accountBalance - amount;
+            _totalSupply -= amount;
+        }
+        
+        emit Transfer(account, address(0), amount);
+        emit Burn(account, amount);
     }
 }

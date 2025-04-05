@@ -1,0 +1,5 @@
+
+Compiler run successful!
+Deployer: 0x7ad252d01D9130eb86eB7B154c8bb6f1922434e7
+Deployed to: 0x78C13047e01cd6d30337B6D95Db370c1eEEE5567
+Transaction hash: 0x188eea056543c76431fccb6752bc52ca06fd5bcd70934a259cebcb618195b264
